@@ -14,23 +14,28 @@
  * limitations under the License.
  */
 
+import 'dotenv/config';
 import { genkit } from 'genkit/beta';
 import type { AgentState } from './types';
 import {openAICompatible} from "@genkit-ai/compat-oai";
 import {modelRef} from "genkit";
 
+const pluginName = 'spark';
+
 // Define a reference to your model
+const modelId = process.env.MODEL_ID ?? 'nvidia/Qwen3.8-27B-NVFP4';
+
 export const myLocalModel = modelRef({
-  name: 'spark/nvidia/Qwen3.8-27B-NVFP4', // format: <name property from plugin>/<model id from provider>
+  name: pluginName + '/' + modelId, // format: <name property from plugin>/<model id from provider>
   // You can specify model-specific configuration here if needed.
   // For many custom models, Genkit's default capabilities are sufficient.
 });
 
 export const ai = genkit({
   plugins: [openAICompatible({
-    name: 'spark',
-    apiKey: 'xxx', // Required, but can be a placeholder for local servers
-    baseURL: 'http://10.10.21.2:8000/v1',
+    name: pluginName,
+    apiKey: process.env.SPARK_API_KEY ?? 'xxx', // Required, but can be a placeholder for local servers
+    baseURL: process.env.SPARK_BASE_URL,
   }),],
   model: myLocalModel,
 });
