@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { Message, ToolRequestPart } from 'genkit';
+import type { Message, ToolRequestPart } from 'genkit/beta';
 import { createInterface } from 'node:readline';
 import { ai } from './genkit.js';
 import { routingAgent } from './routingAgent.js';
@@ -93,7 +93,7 @@ async function handleUserInput(chat: any): Promise<void> {
   return new Promise((resolve) => {
     rl.question(`\n${COLORS.PROMPT}prompt>${COLORS.RESET} `, async (input) => {
       try {
-        const startMessageCount = chat.messages.length;
+        const startMessageCount = chat.messages?.length;
         const { stream, response } = await chat.sendStream(input);
         await handleChatResponse(stream, response, startMessageCount);
         resolve();
@@ -106,9 +106,13 @@ async function handleUserInput(chat: any): Promise<void> {
 }
 
 async function main() {
-  const chat = ai
-    .createSession({ initialState: EXAMPLE_USER_CONTEXT })
-    .chat(routingAgent);
+  const chat = routingAgent.chat({
+    state: {
+      custom: structuredClone(EXAMPLE_USER_CONTEXT),
+      messages: [],
+      artifacts: [],
+    },
+  });
 
   const greeting = await getGreeting();
   console.log();

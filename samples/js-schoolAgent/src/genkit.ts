@@ -14,13 +14,25 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit/beta';
 import type { AgentState } from './types';
+import {openAICompatible} from "@genkit-ai/compat-oai";
+import {modelRef} from "genkit";
+
+// Define a reference to your model
+export const myLocalModel = modelRef({
+  name: 'spark/nvidia/Qwen3.8-27B-NVFP4', // format: <name property from plugin>/<model id from provider>
+  // You can specify model-specific configuration here if needed.
+  // For many custom models, Genkit's default capabilities are sufficient.
+});
 
 export const ai = genkit({
-  plugins: [googleAI()],
-  model: googleAI.model('gemini-pro-latest'),
+  plugins: [openAICompatible({
+    name: 'spark',
+    apiKey: 'xxx', // Required, but can be a placeholder for local servers
+    baseURL: 'http://10.10.21.2:8000/v1',
+  }),],
+  model: myLocalModel,
 });
 
 ai.defineHelper(

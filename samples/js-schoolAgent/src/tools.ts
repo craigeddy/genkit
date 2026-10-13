@@ -70,10 +70,7 @@ export const reportAbsence = ai.defineTool(
     }),
   },
   async (input) => {
-    const student = checkIsParent(
-      input.studentId,
-      ai.currentSession<AgentState>().state!
-    );
+    const student = checkIsParent(input.studentId, ai.currentSession<AgentState>().getCustom()!);
     console.log(
       `[TOOL] Absence reported for ${student.name} (ID: ${input.studentId}) on ${input.date}`
     );
@@ -101,7 +98,7 @@ export const reportTardy = ai.defineTool(
     }),
   },
   async (input) => {
-    checkIsParent(input.studentId, ai.currentSession<AgentState>().state!);
+    checkIsParent(input.studentId, ai.currentSession<AgentState>().getCustom()!);
     console.log(
       '[TOOL] Student',
       input.studentId,
@@ -135,7 +132,7 @@ export const getRecentGrades = ai.defineTool(
     }),
   },
   async ({ studentId, subject, limit = 5 }) => {
-    checkIsParent(studentId, ai.currentSession<AgentState>().state!);
+    checkIsParent(studentId, ai.currentSession<AgentState>().getCustom()!);
     let grades = EXAMPLE_GRADES.filter((g) => g.studentId === studentId);
     if (subject) {
       grades = grades.filter(
