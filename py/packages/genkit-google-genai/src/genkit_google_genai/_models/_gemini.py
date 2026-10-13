@@ -136,6 +136,40 @@ def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
     )
 
 
+def _custom_from_feedback(
+    feedback: genai_types.GenerateContentResponsePromptFeedback | None,
+) -> dict[str, Any] | None:
+    """The response's ``custom`` payload: the prompt feedback the service sent, if any."""
+    if feedback is None:
+        return None
+    return {'promptFeedback': feedback.model_dump(mode='json', by_alias=True, exclude_none=True)}
+
+
+def _no_candidates_response(
+    feedback: genai_types.GenerateContentResponsePromptFeedback | None,
+    usage_metadata: Any,  # noqa: ANN401
+) -> ModelResponse:
+    """Response for a reply that carried no candidates.
+
+    A refused prompt comes back with no candidates and the reason in the
+    prompt feedback, and finishes BLOCKED.
+
+    Raises:
+        GenkitError: INTERNAL when the prompt was not blocked.
+    """
+    reason = feedback.block_reason if feedback is not None else None
+    if feedback is None or not reason or reason == genai_types.BlockedReason.BLOCKED_REASON_UNSPECIFIED:
+        raise GenkitError(status='INTERNAL', message='Model returned no candidates.')
+    return ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part.from_text('')]),
+        finish_reason=FinishReason.BLOCKED,
+        finish_message=feedback.block_reason_message or f'prompt blocked: {reason.value}',
+        candidates=[],
+        usage=_usage_from_metadata(usage_metadata),
+        custom=_custom_from_feedback(feedback),
+    )
+
+
 from genkit_google_genai._models._utils import (  # noqa: E402
     TOOL_INPUT_FIELD,
     PartConverter,
@@ -942,30 +976,30 @@ GENERIC_GEMMA_MODEL = ModelInfo(
 )
 
 
-# Quote autocomplete needs a Literal, so these aliases are the model-id
-# catalog. Constructors take ``Known* | str``: listed ids autocomplete,
-# and an id Google ships after this release still type-checks and routes.
-KnownGemini: TypeAlias = Literal[
+# Quote autocomplete needs a Literal, so these aliases list the ids each
+# constructor autocompletes; SUPPORTED_MODELS is the runtime catalog.
+# Constructors take ``Known* | str``, so an unlisted id still type-checks
+# and routes.
+KnownSharedGemini: TypeAlias = Literal[
     'gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-2.5-flash-lite',
-    'gemini-flash-latest',
-    'gemini-flash-lite-latest',
-    'gemini-pro-latest',
     'gemini-3-flash-preview',
-    'gemini-3-pro-preview',
     'gemini-3.1-flash-lite',
-    'gemini-3.1-flash-lite-preview',
     'gemini-3.1-pro-preview',
     'gemini-3.1-pro-preview-customtools',
     'gemini-3.5-flash',
     'gemini-3.6-flash',
     'gemini-3.7-flash',
-    'gemini-2.5-flash-preview-04-17',
-    'gemini-2.5-pro-exp-03-25',
-    'gemini-2.5-pro-preview-03-25',
-    'gemini-2.5-pro-preview-05-06',
 ]
+# Vertex AI does not serve the rotating ``-latest`` aliases.
+KnownGoogleAIGemini: TypeAlias = Literal[
+    KnownSharedGemini,
+    'gemini-flash-latest',
+    'gemini-flash-lite-latest',
+    'gemini-pro-latest',
+]
+KnownVertexAIGemini: TypeAlias = KnownSharedGemini
 KnownGeminiTts: TypeAlias = Literal[
     'gemini-2.5-flash-preview-tts',
     'gemini-2.5-pro-preview-tts',
@@ -975,11 +1009,8 @@ KnownGeminiTts: TypeAlias = Literal[
 ]
 KnownGeminiImage: TypeAlias = Literal[
     'gemini-2.5-flash-image',
-    'gemini-2.5-flash-image-preview',
     'gemini-3-pro-image',
-    'gemini-3-pro-image-preview',
     'gemini-3.1-flash-image',
-    'gemini-3.1-flash-image-preview',
 ]
 KnownGemma: TypeAlias = Literal[
     'gemma-3-1b-it',
@@ -1735,6 +1766,9 @@ class GeminiModel:
         except TRANSPORT_ERRORS as e:
             raise transport_error(e) from e
 
+        if not response.candidates:
+            return _no_candidates_response(response.prompt_feedback, response.usage_metadata)
+
         content = await self._contents_from_response(response, tools=tools)
 
         # Ensure we always have at least one content item to avoid UI errors
@@ -1743,30 +1777,29 @@ class GeminiModel:
 
         finish_reason = FinishReason.OTHER
         candidates = []
-        if response.candidates:
-            for i, c in enumerate(response.candidates):
-                c_content = []
-                if c.content and c.content.parts:
-                    for part in c.content.parts:
-                        converted = PartConverter.from_gemini(part=part, tools=tools)
-                        if converted:
-                            c_content.append(converted)
+        for i, c in enumerate(response.candidates):
+            c_content = []
+            if c.content and c.content.parts:
+                for part in c.content.parts:
+                    converted = PartConverter.from_gemini(part=part, tools=tools)
+                    if converted:
+                        c_content.append(converted)
 
-                if not c_content:
-                    c_content = [Part.from_text('')]
+            if not c_content:
+                c_content = [Part.from_text('')]
 
-                c_finish_reason = _to_finish_reason(c.finish_reason)
+            c_finish_reason = _to_finish_reason(c.finish_reason)
 
-                if i == 0:
-                    finish_reason = c_finish_reason
+            if i == 0:
+                finish_reason = c_finish_reason
 
-                candidates.append(
-                    Candidate(
-                        index=float(i),
-                        message=Message(role=Role.MODEL, content=c_content),
-                        finish_reason=c_finish_reason,
-                    )
+            candidates.append(
+                Candidate(
+                    index=float(i),
+                    message=Message(role=Role.MODEL, content=c_content),
+                    finish_reason=c_finish_reason,
                 )
+            )
 
         return ModelResponse(
             message=Message(
@@ -1776,6 +1809,7 @@ class GeminiModel:
             finish_reason=finish_reason,
             candidates=candidates,
             usage=_usage_from_metadata(response.usage_metadata),
+            custom=_custom_from_feedback(response.prompt_feedback),
         )
 
     async def _streaming_generate(
@@ -1798,9 +1832,15 @@ class GeminiModel:
             tools: tools declared this turn
 
         Returns:
-            empty genai response
+            genai response.
         """
         client = client or self._client
+        accumulated_content: list[Part] = []
+        finish_reason = FinishReason.UNKNOWN
+        usage_metadata: Any = None
+        prompt_feedback: genai_types.GenerateContentResponsePromptFeedback | None = None
+        saw_chunk = False
+        saw_candidates = False
         try:
             generator = await client.aio.models.generate_content_stream(
                 model=resolve_vertex_model_name(client, model_name),
@@ -1810,10 +1850,8 @@ class GeminiModel:
             # The HTTP call happens on the first iteration, not on the
             # await that created the generator, so classify has to cover
             # the async for as well.
-            accumulated_content: list[Part] = []
-            finish_reason = FinishReason.UNKNOWN
-            usage_metadata: Any = None
             async for response_chunk in generator:
+                saw_chunk = True
                 content = await self._contents_from_response(response_chunk, tools=tools)
                 if content:  # Only process if we have content
                     accumulated_content.extend(content)
@@ -1827,26 +1865,36 @@ class GeminiModel:
                 # chunks, so hold onto the latest values we see as the stream drains —
                 # otherwise a streamed turn reports no finish reason and no usage at all.
                 if response_chunk.candidates and response_chunk.candidates[0] is not None:
+                    saw_candidates = True
                     fr = response_chunk.candidates[0].finish_reason
                     if fr:
                         finish_reason = _to_finish_reason(fr)
                 if response_chunk.usage_metadata is not None:
                     usage_metadata = response_chunk.usage_metadata
-
-            return ModelResponse(
-                message=Message(
-                    role=Role.MODEL,
-                    content=accumulated_content,
-                ),
-                finish_reason=finish_reason,
-                usage=_usage_from_metadata(usage_metadata),
-            )
+                if response_chunk.prompt_feedback is not None:
+                    prompt_feedback = response_chunk.prompt_feedback
         except APIError as e:
             raise api_error(e) from e
         except GOOGLE_AUTH_ERRORS as e:
             raise_auth_error(e)
         except TRANSPORT_ERRORS as e:
             raise transport_error(e) from e
+
+        # An empty 200 body ends the SDK's stream without a chunk or an error.
+        if not saw_chunk:
+            raise GenkitError(status='UNAVAILABLE', message='Model stream returned no responses.')
+        if not saw_candidates:
+            return _no_candidates_response(prompt_feedback, usage_metadata)
+
+        return ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=accumulated_content,
+            ),
+            finish_reason=finish_reason,
+            usage=_usage_from_metadata(usage_metadata),
+            custom=_custom_from_feedback(prompt_feedback),
+        )
 
     @cached_property
     def metadata(self) -> dict:
